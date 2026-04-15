@@ -33,7 +33,8 @@ SEND_INTERVAL   = 1  # seconds
 state = {
     "battery_percent":    85.0,
     "battery_voltage":    12.4,
-    "speed":              0.0,
+    "left_speed":         0.0,
+    "right_speed":        0.0,
     "heading":            0.0,
     "lat":                30.021420,
     "lng":                31.225810,
@@ -41,6 +42,8 @@ state = {
     "left_motor_current": 0.0,
     "right_motor_current":0.0,
     "rpi_current":        0.8,
+    "tone":               0,
+    "msg_error":          "",
 }
 
 
@@ -56,8 +59,9 @@ def generate_telemetry() -> dict:
     s["battery_percent"] = clamp(s["battery_percent"] + random.uniform(-0.3, 0.05), 0, 100)
     s["battery_voltage"] = clamp(9.0 + (s["battery_percent"] / 100) * 3.6, 9.0, 12.6)
 
-    # Speed fluctuates 0 – 3 m/s
-    s["speed"] = clamp(s["speed"] + random.uniform(-0.3, 0.3), 0, 3)
+    # Speed fluctuates 0 – 3 m/s for left and right
+    s["left_speed"]  = clamp(s["left_speed"] + random.uniform(-0.3, 0.3), 0, 3)
+    s["right_speed"] = clamp(s["right_speed"] + random.uniform(-0.3, 0.3), 0, 3)
 
     # Heading drifts
     s["heading"] = (s["heading"] + random.uniform(-2.5, 2.5)) % 360
@@ -69,12 +73,22 @@ def generate_telemetry() -> dict:
     # Temperature
     s["components_temp"] = clamp(s["components_temp"] + random.uniform(-0.5, 0.5), 25, 75)
 
-    # Motor currents proportional to speed
-    s["left_motor_current"]  = clamp(s["speed"] * 1.2 + random.uniform(-0.3, 0.3), 0, 5)
-    s["right_motor_current"] = clamp(s["speed"] * 1.2 + random.uniform(-0.3, 0.3), 0, 5)
+    # Motor currents proportional to respective speeds
+    s["left_motor_current"]  = clamp(s["left_speed"] * 1.2 + random.uniform(-0.1, 0.1), 0, 5)
+    s["right_motor_current"] = clamp(s["right_speed"] * 1.2 + random.uniform(-0.1, 0.1), 0, 5)
 
     # RPi current fairly stable
     s["rpi_current"] = clamp(s["rpi_current"] + random.uniform(-0.05, 0.05), 0.4, 1.5)
+
+    # Tone (bit) fluctuations (e.g. 5% chance to toggle if 0, more if an "error" occurs)
+    if random.random() > 0.95:
+        s["tone"] = 1 if s["tone"] == 0 else 0
+    
+    # Error message simulation
+    if s["tone"] == 1 and random.random() > 0.8:
+        s["msg_error"] = random.choice(["OVERHEAT DETECTED", "LOW VOLTAGE", "COMM LOSS", "SENSOR FAULT"])
+    elif s["tone"] == 0:
+        s["msg_error"] = ""
 
     # Simulated network latency
     latency = clamp(15 + random.random() * 40, 10, 120)
@@ -84,7 +98,8 @@ def generate_telemetry() -> dict:
         "data": {
             "batteryPercent":    round(s["battery_percent"], 1),
             "batteryVoltage":    round(s["battery_voltage"], 2),
-            "speed":             round(s["speed"], 2),
+            "leftSpeed":         round(s["left_speed"], 2),
+            "rightSpeed":        round(s["right_speed"], 2),
             "heading":           round(s["heading"], 1),
             "gps": {
                 "lat":           round(s["lat"], 6),
@@ -94,6 +109,8 @@ def generate_telemetry() -> dict:
             "leftMotorCurrent":  round(s["left_motor_current"], 2),
             "rightMotorCurrent": round(s["right_motor_current"], 2),
             "rpiCurrent":        round(s["rpi_current"], 2),
+            "tone":              s["tone"],
+            "msgError":          s["msg_error"],
             "latency":           round(latency),
         },
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -151,11 +168,10 @@ async def sender(websocket):
             print(
                 f"📤  TX [{tick:>4}] "
                 f"Batt={d['batteryPercent']:5.1f}% | "
-                f"Speed={d['speed']:4.2f} m/s | "
+                f"L-Spd={d['leftSpeed']:4.2f} | R-Spd={d['rightSpeed']:4.2f} | "
                 f"Heading={d['heading']:5.1f}° | "
-                f"GPS=({d['gps']['lat']:.6f}, {d['gps']['lng']:.6f}) | "
-                f"Temp={d['componentsTemp']:.1f}°C | "
-                f"Motors=({d['leftMotorCurrent']:.2f}A, {d['rightMotorCurrent']:.2f}A)"
+                f"Tone={d['tone']} | Err={d['msgError'] or 'None'} | "
+                f"GPS=({d['gps']['lat']:.6f}, {d['gps']['lng']:.6f})"
             )
             await asyncio.sleep(SEND_INTERVAL)
     except websockets.ConnectionClosed:

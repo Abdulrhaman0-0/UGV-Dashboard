@@ -167,14 +167,25 @@ export default function App() {
     const batt      = Math.round(telemetry?.batteryPercent ?? 0);
     const battLow   = batt > 0 && batt < 20;
     const battColor = battLow ? 'var(--accent-red)' : 'var(--accent-primary)';
-    const speed     = (telemetry?.speed ?? 0).toFixed(1);
-    const heading   = Math.round(telemetry?.heading ?? 0);
-    const lat       = (telemetry?.gps?.lat ?? 0).toFixed(5);
-    const lng       = (telemetry?.gps?.lng ?? 0).toFixed(5);
-    const temp      = telemetry?.componentsTemp ? Math.round(telemetry.componentsTemp) : '--';
-    const tempHigh  = typeof temp === 'number' && temp > 70;
-    const isOnline  = status === 'OPERATIONAL';
-    const ugvPos    = telemetry?.gps
+    const leftSpeed   = (telemetry?.leftSpeed ?? 0).toFixed(1);
+    const rightSpeed  = (telemetry?.rightSpeed ?? 0).toFixed(1);
+    const heading     = Math.round(telemetry?.heading ?? 0);
+    const lat         = (telemetry?.gps?.lat ?? 0).toFixed(5);
+    const lng         = (telemetry?.gps?.lng ?? 0).toFixed(5);
+    const temp        = telemetry?.componentsTemp ? Math.round(telemetry.componentsTemp) : '--';
+    const tempHigh    = typeof temp === 'number' && temp > 70;
+    
+    // Motor and RPi currents
+    const leftCurr    = (telemetry?.leftMotorCurrent ?? 0).toFixed(2);
+    const rightCurr   = (telemetry?.rightMotorCurrent ?? 0).toFixed(2);
+    const rpiCurr     = (telemetry?.rpiCurrent ?? 0).toFixed(2);
+    
+    // Tone and Errors
+    const toneActive  = telemetry?.tone === 1;
+    const errorMessage = telemetry?.msgError ?? "";
+    
+    const isOnline    = status === 'OPERATIONAL';
+    const ugvPos      = telemetry?.gps
         ? [telemetry.gps.lat, telemetry.gps.lng]
         : [34.0522, -118.2437]; // Default: LA
 
@@ -237,6 +248,12 @@ export default function App() {
 
                 <div className="header-right">
                     <div className="header-status" aria-live="polite">
+                        {isOnline && (
+                            <div className="tone-indicator-wrap">
+                                <div className={`tone-lamp ${toneActive ? 'active' : ''}`} title="System Tone Indicator" />
+                                <span className="tone-label">{toneActive ? 'ALARM' : 'OK'}</span>
+                            </div>
+                        )}
                         <span>STATUS:</span>
                         <span
                             className="status-label"
@@ -532,26 +549,68 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* Speed bar */}
-                    <div className="widget" aria-label={`Speed: ${speed} m/s`}>
+                    {/* Dual Speed Bar */}
+                    <div className="widget" aria-label={`Left Speed: ${leftSpeed}, Right Speed: ${rightSpeed} m/s`}>
                         <div className="widget-title">
-                            <span className="widget-title-icon" aria-hidden="true">⚡</span>
-                            Speed
+                            <span className="widget-title-icon" aria-hidden="true">📊</span>
+                            Speed (L / R)
                         </div>
-                        <div className="speed-bar-wrap">
-                            <div className="speed-ticks" aria-hidden="true" role="presentation">
-                                {[...Array(15)].map((_, i) => (
-                                    <div
-                                        key={i}
-                                        className={`tick ${(i / 15) * 5 <= speed ? 'active' : ''}`}
-                                    />
-                                ))}
+                        <div className="dual-speed-container">
+                            <div className="speed-column">
+                                <div className="speed-ticks vertical" aria-hidden="true">
+                                    {[...Array(12)].map((_, i) => (
+                                        <div key={i} className={`tick vertical ${(i / 12) * 5 <= leftSpeed ? 'active' : ''}`} />
+                                    ))}
+                                </div>
+                                <div className="speed-label-mini">LEFT</div>
+                                <div className="speed-val-mini">{leftSpeed}</div>
                             </div>
-                            <span className="speed-val">
-                                {speed} <span className="speed-unit">m/s</span>
-                            </span>
+                            <div className="speed-column">
+                                <div className="speed-ticks vertical" aria-hidden="true">
+                                    {[...Array(12)].map((_, i) => (
+                                        <div key={i} className={`tick vertical ${(i / 12) * 5 <= rightSpeed ? 'active' : ''}`} />
+                                    ))}
+                                </div>
+                                <div className="speed-label-mini">RIGHT</div>
+                                <div className="speed-val-mini">{rightSpeed}</div>
+                            </div>
                         </div>
                     </div>
+
+                    {/* Power & Current Telemetry */}
+                    <div className="widget" aria-label="Power and Current Monitoring">
+                        <div className="widget-title">
+                            <span className="widget-title-icon" aria-hidden="true">⚡</span>
+                            Power Diagnostics
+                        </div>
+                        <div className="power-diagnostics-grid">
+                            <div className="power-item">
+                                <div className="power-label">MOTOR L</div>
+                                <div className="power-val">{leftCurr}<span>A</span></div>
+                            </div>
+                            <div className="power-item">
+                                <div className="power-label">MOTOR R</div>
+                                <div className="power-val">{rightCurr}<span>A</span></div>
+                            </div>
+                            <div className="power-item wide">
+                                <div className="power-label">SYSTEM (RPI)</div>
+                                <div className="power-val">{rpiCurr}<span>A</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Error Message Dashboard */}
+                    {errorMessage && (
+                        <div className="widget error-terminal-widget" role="alert">
+                            <div className="widget-title" style={{ color: 'var(--accent-red)' }}>
+                                <span className="widget-title-icon">⚠</span>
+                                SYSTEM ERROR
+                            </div>
+                            <div className="error-msg-box">
+                                {errorMessage}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Compass */}
                     <div className="widget" aria-label={`Heading: ${heading} degrees`}>
