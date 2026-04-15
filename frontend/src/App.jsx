@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './App.css';
@@ -16,7 +16,23 @@ let DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
+/* ── Custom Waypoint Marker ── */
+const WaypointIcon = L.divIcon({
+    className: 'waypoint-marker-circle',
+    html: `<div class="waypoint-inner"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+});
 
+/* ── Map Click Handler ── */
+function MapClickHandler({ onMapClick }) {
+    useMapEvents({
+        click(e) {
+            onMapClick(e.latlng);
+        }
+    });
+    return null;
+}
 
 /* ── Map auto-track helper ── */
 function MapTracker({ position, active }) {
@@ -58,6 +74,7 @@ export default function App() {
     // ── Auth & connectivity state ──
     const [screen,   setScreen]   = useState('login');
     const [username, setUsername] = useState('admin');
+    const [waypoints, setWaypoints] = useState([]);
     const [password, setPassword] = useState('admin123');
     const [status,   setStatus]   = useState('Disconnected');
 
@@ -161,6 +178,37 @@ export default function App() {
         setTelemetry(null);
         setStatus('Disconnected');
         setLogs([]);
+    };
+
+    /* ── Waypoint / Mission Logic ── */
+    const handleMapClick = useCallback((latlng) => {
+        setWaypoints(prev => [...prev, latlng]);
+    }, []);
+
+    const handleClearRoute = () => {
+        setWaypoints([]);
+        addLog('SYSTEM', 'Mission waypoints cleared');
+    };
+
+    const handleSendMission = () => {
+        if (waypoints.length === 0) {
+            addLog('ERROR', 'No waypoints to send', true);
+            return;
+        }
+        const payload = {
+            type: 'set_route',
+            data: {
+                route: waypoints.map(wp => ({
+                    header: { frame_id: 'map' },
+                    pose: {
+                        position: { x: wp.lat, y: wp.lng, z: 0.0 },
+                        orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }
+                    }
+                }))
+            }
+        };
+        send(payload);
+        addLog('CMD', `Mission sent: ${waypoints.length} waypoints`);
     };
 
     /* ── Derived telemetry ── */
@@ -319,18 +367,19 @@ export default function App() {
                         </button>
                         <button
                             className="btn-action"
-                            id="btn-follow-path"
-                            aria-label="Follow path mode"
+                            id="btn-clear-route"
+                            onClick={handleClearRoute}
+                            aria-label="Clear active waypoints"
                         >
-                            FOLLOW PATH
+                            CLEAR ROUTE
                         </button>
                         <button
                             className="btn-action"
-                            id="btn-auto-nav"
-                            onClick={() => { send(STATIC_ROUTE); addLog('CMD', 'Auto Nav initiated'); }}
-                            aria-label="Start autonomous navigation"
+                            id="btn-send-mission"
+                            onClick={handleSendMission}
+                            aria-label="Send mission waypoints"
                         >
-                            AUTO NAV
+                            SEND MISSION
                         </button>
                     </div>
 
@@ -468,6 +517,25 @@ export default function App() {
                             url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                             attribution="Esri World Imagery"
                         />
+                        <MapClickHandler onMapClick={handleMapClick} />
+                        
+                        {waypoints.length > 0 && (
+                            <Polyline 
+                                positions={[ugvPos, ...waypoints.map(wp => [wp.lat, wp.lng])]} 
+                                pathOptions={{ color: '#00D1FF', weight: 4, dashArray: '8, 8' }} 
+                            />
+                        )}
+                        
+                        {waypoints.map((wp, i) => (
+                            <Marker key={i} position={wp} icon={WaypointIcon}>
+                                <Popup>
+                                    <strong>Waypoint {i + 1}</strong><br/>
+                                    Lat: {wp.lat.toFixed(6)}<br/>
+                                    Lng: {wp.lng.toFixed(6)}
+                                </Popup>
+                            </Marker>
+                        ))}
+                        
                         <Marker 
                             position={ugvPos} 
                             icon={L.divIcon({
