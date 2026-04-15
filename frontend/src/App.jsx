@@ -16,26 +16,7 @@ let DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-/* ── Custom UGV Marker — matches design token --accent-primary ── */
-const UgvIcon = L.divIcon({
-    className: 'ugv-marker-icon',
-    html: `<div style="
-        background: rgba(0,255,65,0.12);
-        border: 2px solid #00FF41;
-        border-radius: 4px;
-        padding: 4px;
-        box-shadow: 0 0 18px rgba(0,255,65,0.6);
-        color: #00FF41;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        width:38px;
-        height:38px;
-        font-size:18px;
-    ">🚙</div>`,
-    iconSize:   [38, 38],
-    iconAnchor: [19, 19],
-});
+
 
 /* ── Map auto-track helper ── */
 function MapTracker({ position, active }) {
@@ -275,7 +256,7 @@ export default function App() {
                         </div>
                         <div>
                             <div style={{ color: 'var(--fg-primary)', fontWeight: 600 }}>Admin</div>
-                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-secondary)' }}>John D.</div>
+                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-secondary)' }}>hamoly</div>
                         </div>
                     </div>
 
@@ -470,7 +451,16 @@ export default function App() {
                             url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                             attribution="Esri World Imagery"
                         />
-                        <Marker position={ugvPos} icon={UgvIcon}>
+                        <Marker 
+                            position={ugvPos} 
+                            icon={L.divIcon({
+                                className: 'ugv-tank-marker',
+                                html: `<img src="/tank.png" style="width: 48px; height: 48px; transform: rotate(${heading}deg); transition: transform 0.5s ease-out;" />`,
+                                iconSize: [48, 48],
+                                iconAnchor: [24, 24],
+                                popupAnchor: [0, -20]
+                            })}
+                        >
                             <Popup>
                                 <strong>UGV-01</strong><br/>
                                 Status: {isOnline ? 'ONLINE' : 'OFFLINE'}<br/>
