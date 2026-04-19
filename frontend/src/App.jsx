@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents, Polyline } from 'react-leaflet';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './App.css';
@@ -479,7 +479,7 @@ export default function App() {
 
             {/* ── Dashboard Grid ── */}
             <main className="dashboard-grid" role="main">
-                <PanelGroup direction="horizontal">
+                <PanelGroup orientation="horizontal">
                     {/* ═══ LEFT SIDEBAR — Operations ═══ */}
                     <Panel defaultSize={20} minSize={15}>
                         <div className="panel sidebar-left panel-content-area" aria-label="Operations Panel">
@@ -654,7 +654,7 @@ export default function App() {
 
                     {/* ═══ CENTER — Map & Logs ═══ */}
                     <Panel defaultSize={60} minSize={30}>
-                        <PanelGroup direction="vertical">
+                        <PanelGroup orientation="vertical">
                             {/* Map Area */}
                             <Panel defaultSize={75} minSize={40}>
                                 <div className="map-wrap" style={{ height: '100%', width: '100%', position: 'relative' }}>
