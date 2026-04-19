@@ -120,6 +120,13 @@ export default function App() {
         );
     }, []);
 
+    /* Send a message over the WebSocket */
+    const send = useCallback((obj) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify(obj));
+        }
+    }, []);
+
     /* Keyboard mapping for Manual Control */
     useEffect(() => {
         if (screen !== 'dashboard' || activeTab !== 1 || sessionLocked) return;
@@ -150,13 +157,6 @@ export default function App() {
             window.removeEventListener('keyup', handleKeyUp);
         };
     }, [screen, activeTab, sessionLocked, send]);
-
-    /* Send a message over the WebSocket */
-    const send = useCallback((obj) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify(obj));
-        }
-    }, []);
 
     /* ── Login / WebSocket init ── */
     const handleLogin = (e) => {
