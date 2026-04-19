@@ -111,7 +111,16 @@ export default function App() {
     /* Auto-scroll log console */
     useEffect(() => {
         if (autoLogScroll && logScrollRef.current) {
-            logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
+            const scroll = () => {
+                if (logScrollRef.current) {
+                    logScrollRef.current.scrollTo({
+                        top: logScrollRef.current.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                }
+            };
+            scroll();
+            setTimeout(scroll, 100);
         }
     }, [logs, autoLogScroll]);
 
