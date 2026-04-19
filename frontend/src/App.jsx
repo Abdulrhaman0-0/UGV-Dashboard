@@ -732,8 +732,8 @@ export default function App() {
                                             <Popup>
                                                 <div className="popup-hud">
                                                     <div className="popup-title">UGV-01 NOMAD</div>
-                                                    <div className="popup-data">LAT: {telemetry.gps?.lat.toFixed(6)}</div>
-                                                    <div className="popup-data">LNG: {telemetry.gps?.lng.toFixed(6)}</div>
+                                                    <div className="popup-data">LAT: {telemetry?.gps?.lat?.toFixed(6) ?? '0.000000'}</div>
+                                                    <div className="popup-data">LNG: {telemetry?.gps?.lng?.toFixed(6) ?? '0.000000'}</div>
                                                     <div className="popup-data">STATUS: {isOnline ? 'OPERATIONAL' : 'OFFLINE'}</div>
                                                 </div>
                                             </Popup>
