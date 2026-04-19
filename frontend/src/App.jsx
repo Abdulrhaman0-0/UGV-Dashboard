@@ -40,8 +40,10 @@ function MapTracker({ position, active }) {
     const map = useMap();
     useEffect(() => {
         if (active && position?.[0] && position?.[1]) {
-            map.flyTo(position, map.getZoom(), { animate: true, duration: 0.8 });
+            map.flyTo(position, 18, { animate: true, duration: 0.8 });
         }
+        // Ensuring map tiles render correctly if container resized
+        setTimeout(() => map.invalidateSize(), 50);
     }, [position, active, map]);
     return null;
 }
@@ -92,6 +94,7 @@ export default function App() {
     const [sessionLocked, setSessionLocked] = useState(false);
     const [telemetryHistory, setTelemetryHistory] = useState([]);
     const [speedRequest, setSpeedRequest] = useState(2.4);
+    const [autoLogScroll, setAutoLogScroll] = useState(true);
 
     // ── Camera toggle ──
     const [cameraOpen, setCameraOpen] = useState(false);
@@ -107,10 +110,10 @@ export default function App() {
 
     /* Auto-scroll log console */
     useEffect(() => {
-        if (logScrollRef.current) {
+        if (autoLogScroll && logScrollRef.current) {
             logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
         }
-    }, [logs]);
+    }, [logs, autoLogScroll]);
 
     /* Append a log entry (max 50 entries) */
     const addLog = useCallback((tag, msg, isAlert = false) => {
@@ -747,9 +750,15 @@ export default function App() {
 
                             <Panel defaultSize={25} minSize={15}>
                                 <div className="log-area" style={{ height: '100%', marginBottom: 0, padding: '10px', background: 'var(--bg-base)', borderTop: '1px solid var(--border-default)' }}>
-                                    <div className="log-console-header">
-                                        <div className="log-console-dot" aria-hidden="true" />
-                                        EVENT LOG
+                                    <div className="log-console-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <div className="log-console-dot" aria-hidden="true" />
+                                            EVENT LOG
+                                        </div>
+                                        <label style={{ fontSize: '10px', color: 'var(--fg-secondary)', display: 'flex', gap: '4px', cursor: 'pointer', background: 'var(--bg-elevated)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-default)' }}>
+                                            <input type="checkbox" checked={autoLogScroll} onChange={(e) => setAutoLogScroll(e.target.checked)} />
+                                            AUTO SCROLL
+                                        </label>
                                     </div>
                                     <div className="log-scroll" ref={logScrollRef}>
                                         {logs.length === 0 && (
