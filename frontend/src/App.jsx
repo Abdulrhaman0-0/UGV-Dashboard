@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents, Polyline } from 'react-leaflet';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './App.css';
@@ -83,7 +84,13 @@ export default function App() {
     const [telemetry,    setTelemetry]    = useState(null);
     const [autoTrack,    setAutoTrack]    = useState(true);
     const [clock,        setClock]        = useState(formatPST());
-    const [manualMode,   setManualMode]   = useState(true);
+    const [activeTab, setActiveTab] = useState(1);
+    const [actionOnArrival, setActionOnArrival] = useState(false);
+    const [targetLat, setTargetLat] = useState("");
+    const [targetLng, setTargetLng] = useState("");
+    const [pathHistory, setPathHistory] = useState([]);
+    const [sessionLocked, setSessionLocked] = useState(false);
+    const [telemetryHistory, setTelemetryHistory] = useState([]);
     const [speedRequest, setSpeedRequest] = useState(2.4);
 
     // ── Camera toggle ──
@@ -112,6 +119,37 @@ export default function App() {
                 .slice(-50),
         );
     }, []);
+
+    /* Keyboard mapping for Manual Control */
+    useEffect(() => {
+        if (screen !== 'dashboard' || activeTab !== 1 || sessionLocked) return;
+
+        const handleKeyDown = (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+                if (!sessionLocked) setSessionLocked(true);
+                let dir;
+                if (e.key === 'ArrowUp')    dir = 'forward';
+                if (e.key === 'ArrowDown')  dir = 'backward';
+                if (e.key === 'ArrowLeft')  dir = 'left';
+                if (e.key === 'ArrowRight') dir = 'right';
+                if (dir) send({ type: 'manual_cmd', data: { direction: dir } });
+            }
+        };
+
+        const handleKeyUp = (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                send({ type: 'manual_cmd', data: { direction: 'stop' } });
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+        };
+    }, [screen, activeTab, sessionLocked, send]);
 
     /* Send a message over the WebSocket */
     const send = useCallback((obj) => {
@@ -149,6 +187,23 @@ export default function App() {
                     break;
                 case 'telemetry':
                     setTelemetry(msg.data);
+                    if (msg.data.gps?.lat && msg.data.gps?.lng) {
+                        const currentPos = [msg.data.gps.lat, msg.data.gps.lng];
+                        setPathHistory(prev => {
+                            const lastPoint = prev[prev.length - 1];
+                            if (!lastPoint || Math.abs(lastPoint[0] - currentPos[0]) > 0.000005 || Math.abs(lastPoint[1] - currentPos[1]) > 0.000005) {
+                                return [...prev, currentPos];
+                            }
+                            return prev;
+                        });
+                        setTelemetryHistory(prev => [...prev, {
+                            time: new Date().toISOString(),
+                            lat: msg.data.gps.lat,
+                            lng: msg.data.gps.lng,
+                            speed: msg.data.speed || 0,
+                            battery: msg.data.batteryPercent || 0
+                        }]);
+                    }
                     if (Math.random() > 0.95 && msg.data.speed > 0) {
                         addLog('GPS', `Position: ${msg.data.gps.lat.toFixed(4)}°N`);
                     }
@@ -172,6 +227,79 @@ export default function App() {
         ws.onerror = () => setStatus('OFFLINE');
     };
 
+    const handleEStop = () => {
+        send({ type: 'emergency_stop' });
+        setSessionLocked(false);
+        setPathHistory([]);
+        addLog('SYSTEM', 'SOFTWARE E-STOP ENGAGED', true);
+    };
+
+    const handleStop = () => {
+        send({ type: 'manual_cmd', data: { direction: 'stop' } });
+        setSessionLocked(false);
+        setPathHistory([]);
+        setWaypoints([]);
+        setTargetLat('');
+        setTargetLng('');
+        addLog('SYSTEM', 'Stop command sent. Session unlocked and state reset.');
+    };
+
+    const exportCSV = () => {
+        if (telemetryHistory.length === 0 && logs.length === 0) {
+            addLog('SYSTEM', 'No session data to export');
+            return;
+        }
+
+        let csvContent = "Type,Timestamp,Field1,Field2,Field3,Field4\n";
+
+        // Add telemetry rows
+        telemetryHistory.forEach(row => {
+            csvContent += `TELEMETRY,${row.time},${row.lat},${row.lng},${row.speed},${row.battery}\n`;
+        });
+
+        // Add a separator
+        csvContent += "\nType,Timestamp,Tag,Message,,\n";
+
+        // Add log rows
+        logs.forEach(log => {
+            csvContent += `LOG,${log.time},${log.tag},"${log.msg}",,\n`;
+        });
+
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ugv-mission-summary-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
+        a.click();
+        addLog('SYSTEM', 'Mission summary exported to CSV');
+    };
+
+    const calculateDynamicRoute = async () => {
+        if (!targetLat || !targetLng || !telemetry?.gps) {
+            addLog('ERROR', 'Need target Lat/Lng and current GPS', true);
+            return;
+        }
+        addLog('SYSTEM', 'Calculating dynamic route via OSRM...');
+        try {
+            const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${telemetry.gps.lng},${telemetry.gps.lat};${targetLng},${targetLat}?overview=full&geometries=geojson`);
+            const data = await res.json();
+            if (data.routes && data.routes[0]) {
+                const coords = data.routes[0].geometry.coordinates;
+                const wps = coords.map(c => ({ lat: c[1], lng: c[0] }));
+                setWaypoints(wps);
+                addLog('SYSTEM', `Dynamic route calculated. ${wps.length} waypoints.`);
+            }
+        } catch (e) {
+            addLog('ERROR', 'Routing failed', true);
+        }
+    };
+
+    const engageManual = () => {
+        send({ type: 'manual_cmd', data: { engage: true } });
+        setSessionLocked(true);
+        addLog('SYSTEM', 'Manual mode locked & engaged');
+    }
+
     const handleDisconnect = () => {
         wsRef.current?.close();
         setScreen('login');
@@ -182,8 +310,14 @@ export default function App() {
 
     /* ── Waypoint / Mission Logic ── */
     const handleMapClick = useCallback((latlng) => {
-        setWaypoints(prev => [...prev, latlng]);
-    }, []);
+        if (activeTab === 3 && !sessionLocked) {
+            setTargetLat(latlng.lat.toFixed(6));
+            setTargetLng(latlng.lng.toFixed(6));
+            addLog('MAP', `Target set to: ${latlng.lat.toFixed(4)}, ${latlng.lng.toFixed(4)}`);
+        } else if (activeTab === 2 && !sessionLocked) {
+            setWaypoints(prev => [...prev, latlng]);
+        }
+    }, [activeTab, sessionLocked, addLog]);
 
     const handleClearRoute = () => {
         setWaypoints([]);
@@ -195,9 +329,11 @@ export default function App() {
             addLog('ERROR', 'No waypoints to send', true);
             return;
         }
+        setSessionLocked(true);
         const payload = {
             type: 'set_route',
             data: {
+                explodeOnArrival: activeTab !== 1 ? actionOnArrival : false,
                 route: waypoints.map(wp => ({
                     header: { frame_id: 'map' },
                     pose: {
@@ -208,7 +344,8 @@ export default function App() {
             }
         };
         send(payload);
-        addLog('CMD', `Mission sent: ${waypoints.length} waypoints`);
+        setSessionLocked(true);
+        addLog('CMD', `Mission sent: ${waypoints.length} waypoints. Session LOCKED.`);
     };
 
     /* ── Derived telemetry ── */
@@ -302,7 +439,9 @@ export default function App() {
                                 <span className="tone-label">{toneActive ? 'ALARM' : 'OK'}</span>
                             </div>
                         )}
-                        <span>STATUS:</span>
+                        <button onClick={handleEStop} className="btn-estop">SOFTWARE E-STOP</button>
+                        <button onClick={exportCSV} className="btn-export">EXPORT CSV</button>
+                        <span style={{ marginLeft: '10px' }}>STATUS:</span>
                         <span
                             className="status-label"
                             style={{ color: isOnline ? 'var(--accent-primary)' : 'var(--fg-secondary)' }}
@@ -338,160 +477,128 @@ export default function App() {
 
             {/* ── Dashboard Grid ── */}
             <main className="dashboard-grid" role="main">
+                <PanelGroup direction="horizontal">
+                    {/* ═══ LEFT SIDEBAR — Operations ═══ */}
+                    <Panel defaultSize={20} minSize={15}>
+                        <div className="panel sidebar-left panel-content-area" aria-label="Operations Panel">
+                    
+                        
+                        <div className="panel-title">
+                            <span className="panel-icon" aria-hidden="true">⬡</span>
+                            Operations
+                        </div>
 
-                {/* ═══ LEFT SIDEBAR — Manual Control ═══ */}
-                <div className="panel sidebar-left" aria-label="Manual Control Panel">
-                    <div className="panel-title">
-                        <span className="panel-icon" aria-hidden="true">⬡</span>
-                        Manual Control
-                    </div>
+                        <div className="tabs-container">
+                            <button className={`tab-btn ${activeTab === 1 ? 'active' : ''}`} onClick={() => setActiveTab(1)} disabled={sessionLocked}>MANUAL</button>
+                            <button className={`tab-btn ${activeTab === 2 ? 'active' : ''}`} onClick={() => setActiveTab(2)} disabled={sessionLocked}>AUTO (PRE)</button>
+                            <button className={`tab-btn ${activeTab === 3 ? 'active' : ''}`} onClick={() => setActiveTab(3)} disabled={sessionLocked}>AUTO (DYN)</button>
+                        </div>
+                        {sessionLocked && <div style={{ color: 'var(--accent-amber)', fontSize: '12px', marginBottom: '10px' }}>⚠ Session Locked</div>}
 
-                    {/* Action buttons */}
-                    <div className="section-label">Operations</div>
-                    <div className="control-buttons-stack">
-                        <button
-                            className="btn-action engage"
-                            id="btn-engage"
-                            onClick={() => addLog('SYSTEM', 'Manual control engaged')}
-                            aria-label="Engage manual control"
-                        >
-                            ▶ ENGAGE
-                        </button>
-                        <button
-                            className="btn-action disengage"
-                            id="btn-disengage"
-                            onClick={() => addLog('SYSTEM', 'System disengaged', true)}
-                            aria-label="Disengage system"
-                        >
-                            ■ DISENGAGE
-                        </button>
-                        <button
-                            className="btn-action"
-                            id="btn-clear-route"
-                            onClick={handleClearRoute}
-                            aria-label="Clear active waypoints"
-                        >
-                            CLEAR ROUTE
-                        </button>
-                        <button
-                            className="btn-action"
-                            id="btn-send-mission"
-                            onClick={handleSendMission}
-                            aria-label="Send mission waypoints"
-                        >
-                            SEND MISSION
-                        </button>
-                    </div>
-
-                    {/* D-PAD directional control */}
-                    <div className="section-label" style={{ marginTop: 'var(--sp-2)' }}>Directional</div>
-                    <div className="dpad-section">
-                        <div className="dpad-container">
-                            <div
-                                className="dpad-cross"
-                                role="group"
-                                aria-label="Directional control pad"
-                            >
-                                <button
-                                    className="dbtn n"
-                                    id="dbtn-forward"
-                                    onClick={() => send({ type: 'manual_cmd', data: { direction: 'forward' } })}
-                                    aria-label="Move forward"
-                                >▲</button>
-                                <button
-                                    className="dbtn w"
-                                    id="dbtn-left"
-                                    onClick={() => send({ type: 'manual_cmd', data: { direction: 'left' } })}
-                                    aria-label="Turn left"
-                                >◀</button>
-                                <button
-                                    className="dbtn e"
-                                    id="dbtn-right"
-                                    onClick={() => send({ type: 'manual_cmd', data: { direction: 'right' } })}
-                                    aria-label="Turn right"
-                                >▶</button>
-                                <button
-                                    className="dbtn s"
-                                    id="dbtn-backward"
-                                    onClick={() => send({ type: 'manual_cmd', data: { direction: 'backward' } })}
-                                    aria-label="Move backward"
-                                >▼</button>
+                        {/* MODE 1: MANUAL */}
+                        {activeTab === 1 && (
+                            <div className="mode-content">
+                                <div className="control-buttons-stack" style={{ marginBottom: '16px' }}>
+                                    <button className="btn-action engage" onClick={engageManual} disabled={sessionLocked}>▶ ENGAGE MANUAL</button>
+                                </div>
+                                <div className="dpad-section">
+                                    <div className="dpad-container">
+                                        <div className="dpad-cross">
+                                            <button className="dbtn n" onClick={() => { setSessionLocked(true); send({ type: 'manual_cmd', data: { direction: 'forward' } }); }}>▲</button>
+                                            <button className="dbtn w" onClick={() => { setSessionLocked(true); send({ type: 'manual_cmd', data: { direction: 'left' } }); }}>◀</button>
+                                            <button className="dbtn e" onClick={() => { setSessionLocked(true); send({ type: 'manual_cmd', data: { direction: 'right' } }); }}>▶</button>
+                                            <button className="dbtn s" onClick={() => { setSessionLocked(true); send({ type: 'manual_cmd', data: { direction: 'backward' } }); }}>▼</button>
+                                        </div>
+                                        <button className="btn-stop" onClick={handleStop}>⬛ STOP / UNLOCK</button>
+                                    </div>
+                                </div>
+                                <div style={{ marginTop: '20px' }}>
+                                    <button className="btn-action prominent" style={{ width: '100%' }} onClick={() => send({ type: 'payload_action', data: { action: 'explode' } })}>💣 ACTION / EXPLODE</button>
+                                </div>
                             </div>
-                            <button
-                                className="btn-stop"
-                                id="btn-stop"
-                                onClick={() => send({ type: 'manual_cmd', data: { direction: 'stop' } })}
-                                aria-label="Emergency stop"
-                            >
-                                ⬛ STOP
-                            </button>
-                        </div>
-                    </div>
+                        )}
 
-                    {/* Mode toggles */}
-                    <div className="section-label" style={{ marginTop: 'var(--sp-2)' }}>Drive Mode</div>
-                    <div
-                        className="mode-toggles"
-                        role="radiogroup"
-                        aria-label="Drive mode selection"
-                    >
-                        <div
-                            className={`radio-item ${!manualMode ? 'active' : ''}`}
-                            onClick={() => setManualMode(false)}
-                            role="radio"
-                            aria-checked={!manualMode}
-                            tabIndex={0}
-                            onKeyDown={e => e.key === 'Enter' && setManualMode(false)}
-                            id="mode-autonomous"
-                        >
-                            <div className="radio-circle">
-                                {!manualMode && <div className="inner" />}
+                        {/* MODE 2: AUTO PREDEFINED */}
+                        {activeTab === 2 && (
+                            <div className="mode-content">
+                                <div className="section-label">Predefined Waypoints</div>
+                                <select className="waypoint-select" onChange={(e) => {
+                                    if(e.target.value === 'wp1') setWaypoints([{lat: 34.0522, lng: -118.2437}, {lat: 34.0530, lng: -118.2440}]);
+                                    if(e.target.value === 'clear') setWaypoints([]);
+                                }} style={{ width: '100%', padding: '8px', marginBottom: '16px', background: 'var(--bg-elevated)', color: 'var(--fg-primary)', border: '1px solid var(--border-default)', borderRadius: '4px' }} disabled={sessionLocked}>
+                                    <option value="clear">Select Route...</option>
+                                    <option value="wp1">Alpha Patrol Route</option>
+                                    <option value="wp2">Bravo Perimeter</option>
+                                </select>
+
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer', marginBottom: '16px' }}>
+                                    <input type="checkbox" checked={actionOnArrival} onChange={(e) => !sessionLocked && setActionOnArrival(e.target.checked)} disabled={sessionLocked} />
+                                    Action/Explode on Arrival
+                                </label>
+
+                                <div className="control-buttons-stack">
+                                    <button className="btn-action" onClick={handleSendMission} disabled={sessionLocked}>SEND MISSION</button>
+                                    <button className="btn-stop" onClick={handleStop}>⬛ STOP / UNLOCK</button>
+                                </div>
                             </div>
-                            Autonomous
-                        </div>
-                        <div
-                            className={`radio-item ${manualMode ? 'active' : ''}`}
-                            onClick={() => setManualMode(true)}
-                            role="radio"
-                            aria-checked={manualMode}
-                            tabIndex={0}
-                            onKeyDown={e => e.key === 'Enter' && setManualMode(true)}
-                            id="mode-manual"
-                        >
-                            <div className="radio-circle">
-                                {manualMode && <div className="inner" />}
+                        )}
+
+                        {/* MODE 3: AUTO DYNAMIC */}
+                        {activeTab === 3 && (
+                            <div className="mode-content">
+                                <div className="section-label">Dynamic Routing (OSRM)</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+                                    <input type="number" placeholder="Target Latitude" value={targetLat} onChange={e => setTargetLat(e.target.value)} disabled={sessionLocked} style={{ padding: '8px', background: 'var(--bg-elevated)', color: 'var(--fg-primary)', border: '1px solid var(--border-default)', borderRadius: '4px' }} />
+                                    <input type="number" placeholder="Target Longitude" value={targetLng} onChange={e => setTargetLng(e.target.value)} disabled={sessionLocked} style={{ padding: '8px', background: 'var(--bg-elevated)', color: 'var(--fg-primary)', border: '1px solid var(--border-default)', borderRadius: '4px' }} />
+                                </div>
+                                <button className="btn-action" onClick={calculateDynamicRoute} disabled={sessionLocked} style={{ width: '100%', marginBottom: '16px' }}>Calculate Route</button>
+
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer', marginBottom: '16px' }}>
+                                    <input type="checkbox" checked={actionOnArrival} onChange={(e) => !sessionLocked && setActionOnArrival(e.target.checked)} disabled={sessionLocked}/>
+                                    Action/Explode on Arrival
+                                </label>
+
+                                <div className="control-buttons-stack">
+                                    <button className="btn-action" onClick={handleSendMission} disabled={sessionLocked}>SEND MISSION</button>
+                                    <button className="btn-stop" onClick={handleStop}>⬛ STOP / UNLOCK</button>
+                                    <button className="btn-action" onClick={() => { setWaypoints([]); setPathHistory([]); }}>CLEAR DRAWING</button>
+                                </div>
                             </div>
-                            Manual Remote
+                        )}
+
+                        {/* Speed slider (Shown in all modes) */}
+                        <div className="section-label" style={{ marginTop: 'var(--sp-4)' }}>Max Speed Limit</div>
+                        <div className="speed-slider">
+                            <div className="slider-labels">
+                                <span>0 m/s</span>
+                                <span className="slider-val">{speedRequest.toFixed(1)} m/s</span>
+                                <span>5.0 m/s</span>
+                            </div>
+                            <div className="slider-rail">
+                                <div className="slider-fill" style={{ width: `${(speedRequest / 5) * 100}%` }} />
+                                <div className="slider-thumb" style={{ left: `${(speedRequest / 5) * 100}%` }} />
+                                <input
+                                    type="range"
+                                    min="0" max="5" step="0.1"
+                                    className="slider-input-overlay"
+                                    value={speedRequest}
+                                    id="speed-slider"
+                                    aria-label="Speed request"
+                                    onChange={e => setSpeedRequest(parseFloat(e.target.value))}
+                                />
+                            </div>
                         </div>
                     </div>
+                    </Panel>
 
-                    {/* Speed slider */}
-                    <div className="section-label" style={{ marginTop: 'var(--sp-2)' }}>Max Speed</div>
-                    <div className="speed-slider">
-                        <div className="slider-labels">
-                            <span>0 m/s</span>
-                            <span className="slider-val">{speedRequest.toFixed(1)} m/s</span>
-                            <span>5.0 m/s</span>
-                        </div>
-                        <div className="slider-rail">
-                            <div className="slider-fill" style={{ width: `${(speedRequest / 5) * 100}%` }} />
-                            <div className="slider-thumb" style={{ left: `${(speedRequest / 5) * 100}%` }} />
-                            <input
-                                type="range"
-                                min="0" max="5" step="0.1"
-                                className="slider-input-overlay"
-                                value={speedRequest}
-                                id="speed-slider"
-                                aria-label="Speed request"
-                                onChange={e => setSpeedRequest(parseFloat(e.target.value))}
-                                onMouseUp={e => addLog('CMD', `Speed set: ${e.target.value} m/s`)}
-                            />
-                        </div>
-                    </div>
-                </div>
+                    <PanelResizeHandle className="resize-handle horizontal" />
 
-                {/* ═══ CENTER — Map + Log Console ═══ */}
-                <div className="map-wrap" aria-label="Vehicle map and event log">
+                    {/* ═══ CENTER — Map & Logs ═══ */}
+                    <Panel defaultSize={60} minSize={30}>
+                        <PanelGroup direction="vertical">
+                            {/* Map Area */}
+                            <Panel defaultSize={75} minSize={40}>
+                                <div className="map-wrap" style={{ height: '100%', width: '100%', position: 'relative' }}>
                     {/* Map tools bar */}
                     <div className="map-tools">
                         <button
@@ -519,10 +626,11 @@ export default function App() {
                         />
                         <MapClickHandler onMapClick={handleMapClick} />
                         
+                        {/* Intended Mission Path (Road Snapped) */}
                         {waypoints.length > 0 && (
                             <Polyline 
                                 positions={[ugvPos, ...waypoints.map(wp => [wp.lat, wp.lng])]} 
-                                pathOptions={{ color: '#00D1FF', weight: 4, dashArray: '8, 8' }} 
+                                pathOptions={{ color: 'rgba(0, 255, 65, 0.6)', weight: 4, dashArray: '10, 10' }} 
                             />
                         )}
                         
@@ -535,29 +643,52 @@ export default function App() {
                                 </Popup>
                             </Marker>
                         ))}
+
+                        {/* Historical Path Trail (Uber-style) */}
+                        {pathHistory.length > 1 && (
+                            <>
+                                <Polyline
+                                    positions={pathHistory}
+                                    pathOptions={{ color: "#38BDF8", weight: 6, opacity: 0.3 }}
+                                />
+                                <Polyline
+                                    positions={pathHistory}
+                                    pathOptions={{ color: "#38BDF8", weight: 3, opacity: 1 }}
+                                />
+                            </>
+                        )}
                         
                         <Marker 
                             position={ugvPos} 
                             icon={L.divIcon({
                                 className: 'ugv-tank-marker',
-                                html: `<img src="/tank.png" style="width: 48px; height: 48px; transform: rotate(${heading}deg); transition: transform 0.5s ease-out;" />`,
-                                iconSize: [48, 48],
-                                iconAnchor: [24, 24],
+                                html: `<div style="filter: drop-shadow(0 0 10px rgba(0,255,65,0.4));">
+                                          <img src="/tank.png" style="width: 52px; height: 52px; transform: rotate(${heading}deg); transition: transform 0.5s ease-out;" />
+                                       </div>`,
+                                iconSize: [52, 52],
+                                iconAnchor: [26, 26],
                                 popupAnchor: [0, -20]
                             })}
                         >
                             <Popup>
-                                <strong>UGV-01</strong><br/>
-                                Status: {isOnline ? 'ONLINE' : 'OFFLINE'}<br/>
-                                Lat: {lat}° · Lng: {lng}°
+                                <div className="popup-hud">
+                                    <div className="popup-title">UGV-01 NOMAD</div>
+                                    <div className="popup-data">LAT: {telemetry.gps?.lat.toFixed(6)}</div>
+                                    <div className="popup-data">LNG: {telemetry.gps?.lng.toFixed(6)}</div>
+                                    <div className="popup-data">STATUS: {isOnline ? 'OPERATIONAL' : 'OFFLINE'}</div>
+                                </div>
                             </Popup>
                         </Marker>
                         <MapTracker position={ugvPos} active={autoTrack} />
                     </MapContainer>
+                                </div>
+                            </Panel>
 
-                    {/* Floating log/event console */}
-                    <div className="log-console" role="log" aria-live="polite" aria-label="System event log">
-                        <div className="log-console-header">
+                            <PanelResizeHandle className="resize-handle vertical" />
+
+                            <Panel defaultSize={25} minSize={15}>
+                                <div className="log-area" style={{ height: '100%', marginBottom: 0, padding: '10px', background: 'var(--bg-base)', borderTop: '1px solid var(--border-default)' }}>
+                                    <div className="log-console-header">
                             <div className="log-console-dot" aria-hidden="true" />
                             EVENT LOG
                         </div>
@@ -578,10 +709,15 @@ export default function App() {
                             ))}
                         </div>
                     </div>
-                </div>
+                </Panel>
+            </PanelGroup>
+        </Panel>
 
-                {/* ═══ RIGHT SIDEBAR — Telemetry Widgets ═══ */}
-                <div className="right-sidebar" aria-label="Telemetry widgets">
+                    <PanelResizeHandle className="resize-handle horizontal" />
+
+                    {/* ═══ RIGHT sidebar — Telemetry ═══ */}
+                    <Panel defaultSize={20} minSize={15}>
+                        <div className="panel right-sidebar panel-content-area" aria-label="Telemetry widgets">
 
                     {/* Battery Ring */}
                     <div className={`widget ${battLow ? 'alert-border' : ''}`} aria-label={`Battery: ${batt}%`}>
@@ -787,7 +923,8 @@ export default function App() {
                         </div>
                     </div>
 
-                </div>{/* end right-sidebar */}
+                </div></Panel>
+            </PanelGroup>
             </main>
         </div>
     );
