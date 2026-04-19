@@ -78,7 +78,7 @@ export default function App() {
     const [screen, setScreen] = useState('login');
     const [username, setUsername] = useState('admin');
     const [waypoints, setWaypoints] = useState([]);
-    const [password, setPassword] = useState('admin123');
+    const [password, setPassword] = useState('123456');
     const [status, setStatus] = useState('Disconnected');
 
     // ── Telemetry & operational state ──
