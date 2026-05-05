@@ -338,9 +338,23 @@ export default function App() {
         addLog('SYSTEM', 'Mission waypoints cleared');
     };
 
+    /* ── GPS → Local XY helper (equirectangular approximation) ── */
+    const gpsToLocalXY = useCallback((targetLat, targetLng) => {
+        const originLat = telemetry?.gps?.lat;
+        const originLng = telemetry?.gps?.lng;
+        if (originLat == null || originLng == null) return { x: 0, y: 0 };
+        const dx = (targetLng - originLng) * 111320 * Math.cos(originLat * Math.PI / 180);
+        const dy = (targetLat - originLat) * 111320;
+        return { x: parseFloat(dx.toFixed(4)), y: parseFloat(dy.toFixed(4)) };
+    }, [telemetry]);
+
     const handleSendMission = () => {
         if (waypoints.length === 0) {
             addLog('ERROR', 'No waypoints to send', true);
+            return;
+        }
+        if (!telemetry?.gps?.lat || !telemetry?.gps?.lng) {
+            addLog('ERROR', 'No GPS fix — cannot compute local XY coordinates', true);
             return;
         }
         setSessionLocked(true);
@@ -348,19 +362,41 @@ export default function App() {
             type: 'set_route',
             data: {
                 explodeOnArrival: activeTab !== 1 ? actionOnArrival : false,
-                route: waypoints.map(wp => ({
+                route: waypoints.map(wp => {
+                    const { x, y } = gpsToLocalXY(wp.lat, wp.lng);
+                    return {
+                        header: { frame_id: 'map' },
+                        pose: {
+                            position: { x, y, z: 0 },
+                            orientation: { x: 0, y: 0, z: 0, w: 1 }
+                        }
+                    };
+                })
+            }
+        };
+        send(payload);
+        addLog('CMD', `Mission sent: ${waypoints.length} waypoints (local XY). Session LOCKED.`);
+    };
+
+    /* ── Send a hardcoded local-XY route directly (test profiles) ── */
+    const sendTestRoute = useCallback((points, label) => {
+        const payload = {
+            type: 'set_route',
+            data: {
+                explodeOnArrival: false,
+                route: points.map(pt => ({
                     header: { frame_id: 'map' },
                     pose: {
-                        position: { x: wp.lat, y: wp.lng, z: 0.0 },
-                        orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }
+                        position: { x: pt.x, y: pt.y, z: 0 },
+                        orientation: { x: 0, y: 0, z: 0, w: 1 }
                     }
                 }))
             }
         };
         send(payload);
         setSessionLocked(true);
-        addLog('CMD', `Mission sent: ${waypoints.length} waypoints. Session LOCKED.`);
-    };
+        addLog('CMD', `Test route sent: ${label} → x=${points[0].x}, y=${points[0].y}. Session LOCKED.`);
+    }, [send, addLog]);
 
     /* ── Derived telemetry ── */
     const batt = Math.round(telemetry?.batteryPercent ?? 0);
@@ -575,17 +611,26 @@ export default function App() {
                                     <div className="section-label">Predefined Waypoints</div>
                                     <select
                                         className="waypoint-select"
+                                        value=""
                                         onChange={(e) => {
-                                            if (e.target.value === 'wp1') setWaypoints([{ lat: 34.0522, lng: -118.2437 }, { lat: 34.0530, lng: -118.2440 }]);
-                                            if (e.target.value === 'wp2') setWaypoints([{ lat: 34.0522, lng: -118.2437 }, { lat: 34.0515, lng: -118.2450 }, { lat: 34.0510, lng: -118.2430 }]);
-                                            if (e.target.value === 'clear') setWaypoints([]);
+                                            const v = e.target.value;
+                                            if (v === 'wp1') setWaypoints([{ lat: 34.0522, lng: -118.2437 }, { lat: 34.0530, lng: -118.2440 }]);
+                                            if (v === 'wp2') setWaypoints([{ lat: 34.0522, lng: -118.2437 }, { lat: 34.0515, lng: -118.2450 }, { lat: 34.0510, lng: -118.2430 }]);
+                                            if (v === 'test_fwd') sendTestRoute([{ x: 2.0, y: 0.0, z: 0.0 }], 'Vertical Test (2m Forward)');
+                                            if (v === 'test_lat') sendTestRoute([{ x: 0.0, y: 2.0, z: 0.0 }], 'Horizontal Test (2m Lateral)');
+                                            if (v === 'clear') setWaypoints([]);
+                                            // Reset select back to placeholder after selection
+                                            e.target.value = '';
                                         }}
                                         style={{ width: '100%', padding: '10px', marginBottom: '16px', background: 'var(--bg-elevated)', color: 'var(--fg-primary)', border: '1px solid var(--border-default)', borderRadius: '4px' }}
                                         disabled={sessionLocked}
                                     >
-                                        <option value="clear">Select Mission Profile...</option>
+                                        <option value="">Select Mission Profile...</option>
                                         <option value="wp1">Alpha Patrol Route</option>
                                         <option value="wp2">Bravo Perimeter Survey</option>
+                                        <option disabled style={{ color: 'var(--fg-secondary)', fontSize: '11px' }}>── Testing ──</option>
+                                        <option value="test_fwd">Vertical Test (2m Forward)</option>
+                                        <option value="test_lat">Horizontal Test (2m Lateral)</option>
                                     </select>
 
                                     <label className="payload-checkbox">
