@@ -95,8 +95,6 @@ export default function App() {
     const [telemetryHistory, setTelemetryHistory] = useState([]);
     const [speedRequest, setSpeedRequest] = useState(2.4);
     const [autoLogScroll, setAutoLogScroll] = useState(true);
-    const [manualX, setManualX] = useState('');
-    const [manualY, setManualY] = useState('');
 
     // ── Camera toggle ──
     const [cameraOpen, setCameraOpen] = useState(false);
@@ -400,36 +398,6 @@ export default function App() {
         addLog('CMD', `Test route sent: ${label} → x=${points[0].x}, y=${points[0].y}. Session LOCKED.`);
     }, [send, addLog]);
 
-    /* ── Manual XY Coordinate Send ── */
-    const handleSendManualCoordinate = useCallback(() => {
-        if (manualX === '' || manualY === '') {
-            addLog('ERROR', 'Manual X and Y values are required', true);
-            return;
-        }
-        const x = parseFloat(manualX);
-        const y = parseFloat(manualY);
-        if (isNaN(x) || isNaN(y)) {
-            addLog('ERROR', 'Manual X and Y must be valid numbers', true);
-            return;
-        }
-        const payload = {
-            type: 'set_route',
-            data: {
-                explodeOnArrival: false,
-                route: [{
-                    header: { frame_id: 'map' },
-                    pose: {
-                        position: { x, y, z: 0 },
-                        orientation: { x: 0, y: 0, z: 0, w: 1 }
-                    }
-                }]
-            }
-        };
-        send(payload);
-        setSessionLocked(true);
-        addLog('CMD', `Manual coordinate sent: [${x}, ${y}]. Session LOCKED.`);
-    }, [manualX, manualY, send, addLog]);
-
     /* ── Derived telemetry ── */
     const batt = Math.round(telemetry?.batteryPercent ?? 0);
     const battLow = batt > 0 && batt < 20;
@@ -664,44 +632,6 @@ export default function App() {
                                         <option value="test_fwd">Vertical Test (2m Forward)</option>
                                         <option value="test_lat">Horizontal Test (2m Lateral)</option>
                                     </select>
-
-                                    {/* Manual XY Input */}
-                                    <div className="section-label" style={{ marginTop: '4px' }}>Manual XY Coordinate</div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '10px' }}>
-                                        <div className="input-group">
-                                            <span className="input-label">X</span>
-                                            <input
-                                                id="manual-x-input"
-                                                type="number"
-                                                placeholder="0.00"
-                                                step="any"
-                                                value={manualX}
-                                                onChange={e => setManualX(e.target.value)}
-                                                disabled={sessionLocked}
-                                            />
-                                        </div>
-                                        <div className="input-group">
-                                            <span className="input-label">Y</span>
-                                            <input
-                                                id="manual-y-input"
-                                                type="number"
-                                                placeholder="0.00"
-                                                step="any"
-                                                value={manualY}
-                                                onChange={e => setManualY(e.target.value)}
-                                                disabled={sessionLocked}
-                                            />
-                                        </div>
-                                        <button
-                                            id="send-xy-btn"
-                                            className="btn-action"
-                                            style={{ width: '100%', marginTop: '2px' }}
-                                            onClick={handleSendManualCoordinate}
-                                            disabled={sessionLocked || manualX === '' || manualY === ''}
-                                        >
-                                            ↗ Send XY Coordinate
-                                        </button>
-                                    </div>
 
                                     <label className="payload-checkbox">
                                         <input type="checkbox" checked={actionOnArrival} onChange={(e) => !sessionLocked && setActionOnArrival(e.target.checked)} disabled={sessionLocked} />
